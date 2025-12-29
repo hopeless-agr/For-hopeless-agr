@@ -21,18 +21,19 @@ jobs:
 
           Restart-Service -Name TermService -Force
 
-      - name: Create RDP user with FIXED password (SAFE)
+      - name: Create RDP user with FIXED password (BULLETPROOF)
         run: |
           $password = 'MyRDP@Password123!'
 
-          if (-not (Get-LocalUser -Name "RDP" -ErrorAction SilentlyContinue)) {
-            New-LocalUser -Name "RDP" -NoPassword -AccountNeverExpires
-          }
+          # Create user (ignore error if it already exists)
+          cmd /c "net user RDP $password /add" 2>$null
 
-          net user RDP $password
+          # Ensure password is set (always succeeds)
+          cmd /c "net user RDP $password"
 
-          Add-LocalGroupMember -Group "Administrators" -Member "RDP"
-          Add-LocalGroupMember -Group "Remote Desktop Users" -Member "RDP"
+          # Add permissions
+          cmd /c "net localgroup Administrators RDP /add"
+          cmd /c "net localgroup `"Remote Desktop Users`" RDP /add"
 
           echo "RDP_USERNAME=RDP" >> $env:GITHUB_ENV
           echo "RDP_PASSWORD=$password" >> $env:GITHUB_ENV
@@ -68,8 +69,6 @@ jobs:
 
       - name: Verify RDP Accessibility
         run: |
-          Write-Host "Tailscale IP: $env:TAILSCALE_IP"
-
           $test = Test-NetConnection -ComputerName $env:TAILSCALE_IP -Port 3389
           if (-not $test.TcpTestSucceeded) {
             Write-Error "RDP port 3389 is not reachable"
