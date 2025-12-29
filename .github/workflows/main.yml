@@ -1,0 +1,78 @@
+name: RDP
+
+on:
+  workflow_dispatch:
+
+jobs:
+  secure-rdp:
+    runs-on: windows-latest
+    timeout-minutes: 3600
+
+    steps:
+
+      - name: Configure Core RDP Settings
+        run: |
+          Set-ItemProperty -Path "HKLM:\System\CurrentControlSet\Control\Terminal Server" -Name "fDenyTSConnections" -Value 0 -Force
+          Set-ItemProperty -Path "HKLM:\System\CurrentControlSet\Control\Terminal Server\WinStations\RDP-Tcp" -Name "UserAuthentication" -Value 0 -Force
+          Set-ItemProperty -Path "HKLM:\System\CurrentControlSet\Control\Terminal Server\WinStations\RDP-Tcp" -Name "SecurityLayer" -Value 0 -Force
+
+          netsh advfirewall firewall delete rule name="RDP-Tailscale" 2>$null
+          netsh advfirewall firewall add rule name="RDP-Tailscale" dir=in action=allow protocol=TCP localport=3389
+
+          Restart-Service -Name TermService -Force
+
+      - name: Create RDP user with FIXED password (NO PowerShell APIs)
+        shell: cmd
+        run: |
+          net user RDP MyRDP@Password123! /add
+          net user RDP MyRDP@Password123!
+          net localgroup Administrators RDP /add
+          net localgroup "Remote Desktop Users" RDP /add
+
+      - name: Export credentials
+        run: |
+          echo "RDP_USERNAME=RDP" >> $env:GITHUB_ENV
+          echo "RDP_PASSWORD=MyRDP@Password123!" >> $env:GITHUB_ENV
+
+      - name: Install Tailscale
+        run: |
+          $tsUrl = "https://pkgs.tailscale.com/stable/tailscale-setup-1.82.0-amd64.msi"
+          $installerPath = "$env:TEMP\tailscale.msi"
+
+          Invoke-WebRequest -Uri $tsUrl -OutFile $installerPath
+          Start-Process msiexec.exe -ArgumentList "/i", "`"$installerPath`"", "/quiet", "/norestart" -Wait
+          Remove-Item $installerPath -Force
+
+      - name: Establish Tailscale Connection
+        run: |
+          & "$env:ProgramFiles\Tailscale\tailscale.exe" up `
+            --authkey=${{ secrets.TAILSCALE_AUTH_KEY }} `
+            --hostname=gh-runner-$env:GITHUB_RUN_ID
+
+          for ($i = 0; $i -lt 10; $i++) {
+            $ip = & "$env:ProgramFiles\Tailscale\tailscale.exe" ip -4
+            if ($ip) {
+              echo "TAILSCALE_IP=$ip" >> $env:GITHUB_ENV
+              exit 0
+            }
+            Start-Sleep 5
+          }
+
+          Write-Error "No Tailscale IP assigned"
+          exit 1
+
+      - name: Maintain Connection
+        run: |
+          Write-Host ""
+          Write-Host "===== RDP ACCESS ====="
+          Write-Host "Address  : $env:TAILSCALE_IP"
+          Write-Host "Username : RDP"
+          Write-Host "Password : MyRDP@Password123!"
+          Write-Host "======================"
+          Write-Host ""
+
+          while ($true) {
+            Write-Host "[$(Get-Date)] RDP active"
+            Start-Sleep 300
+          }
+          
